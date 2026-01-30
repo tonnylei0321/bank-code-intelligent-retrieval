@@ -2,7 +2,7 @@
 """
 测试LLM API连接
 
-验证所有配置的LLM API是否可以正常访问
+验证阿里通义千问和DeepSeek API是否可以正常访问
 """
 
 import asyncio
@@ -56,46 +56,6 @@ async def test_qwen_api():
                     return False
     except Exception as e:
         print(f"❌ 阿里通义千问连接错误: {e}")
-        return False
-
-
-async def test_doubao_api():
-    """测试字节豆包API"""
-    print("🧪 测试字节豆包API...")
-    
-    headers = {
-        "Authorization": "Bearer e1d32c08-96c2-442e-8198-1930d8b71a07",
-        "Content-Type": "application/json"
-    }
-    
-    data = {
-        "model": "ep-20241230140956-8xqkz",
-        "messages": [
-            {"role": "user", "content": "你好，请回复'API连接正常'"}
-        ],
-        "temperature": 0.7,
-        "max_tokens": 100
-    }
-    
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
-                headers=headers,
-                json=data,
-                timeout=30
-            ) as response:
-                if response.status == 200:
-                    result = await response.json()
-                    reply = result.get("choices", [{}])[0].get("message", {}).get("content", "")
-                    print(f"✅ 字节豆包: {reply}")
-                    return True
-                else:
-                    error_text = await response.text()
-                    print(f"❌ 字节豆包失败 ({response.status}): {error_text}")
-                    return False
-    except Exception as e:
-        print(f"❌ 字节豆包连接错误: {e}")
         return False
 
 
@@ -232,7 +192,6 @@ async def main():
     # 测试所有API
     results = []
     results.append(await test_qwen_api())
-    results.append(await test_doubao_api())
     results.append(await test_deepseek_api())
     
     # 测试样本生成
@@ -241,12 +200,11 @@ async def main():
     print("\n" + "=" * 50)
     print("📊 测试结果汇总")
     print(f"阿里通义千问: {'✅ 正常' if results[0] else '❌ 失败'}")
-    print(f"字节豆包: {'✅ 正常' if results[1] else '❌ 失败'}")
-    print(f"DeepSeek: {'✅ 正常' if results[2] else '❌ 失败'}")
+    print(f"DeepSeek: {'✅ 正常' if results[1] else '❌ 失败'}")
     print(f"样本生成: {'✅ 正常' if generation_result else '❌ 失败'}")
     
     success_count = sum(results)
-    print(f"\n可用API数量: {success_count}/3")
+    print(f"\n可用API数量: {success_count}/2")
     
     if success_count >= 2:
         print("✅ 系统可以正常运行")

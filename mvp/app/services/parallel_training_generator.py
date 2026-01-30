@@ -75,13 +75,6 @@ class ParallelTrainingGenerator:
                 model_name="qwen-turbo",
                 max_requests_per_minute=100
             ),
-            # LLMConfig(
-            #     name="字节豆包",
-            #     base_url="https://ark.cn-beijing.volces.com",
-            #     api_key="e1d32c08-96c2-442e-8198-1930d8b71a07",
-            #     model_name="ep-20241230140956-8xqkz",  # 模型ID需要更新
-            #     max_requests_per_minute=100
-            # ),
             LLMConfig(
                 name="DeepSeek",
                 base_url="https://api.deepseek.com",
@@ -92,7 +85,7 @@ class ParallelTrainingGenerator:
         ]
         
         # 线程池配置
-        self.max_workers = 12  # 每个LLM 4个线程
+        self.max_workers = 8  # 每个LLM 4个线程，2个LLM总共8个线程
         self.batch_size = 100  # 数据库批量写入大小
         
         # 统计信息
@@ -211,8 +204,6 @@ class ParallelTrainingGenerator:
         """
         if llm_config.name == "阿里通义千问":
             return await self._call_qwen_api(prompt, llm_config, session)
-        elif llm_config.name == "字节豆包":
-            return await self._call_doubao_api(prompt, llm_config, session)
         elif llm_config.name == "DeepSeek":
             return await self._call_deepseek_api(prompt, llm_config, session)
         else:
@@ -252,37 +243,6 @@ class ParallelTrainingGenerator:
         ) as response:
             result = await response.json()
             return result["output"]["text"]
-    
-    async def _call_doubao_api(
-        self, 
-        prompt: str, 
-        llm_config: LLMConfig, 
-        session: aiohttp.ClientSession
-    ) -> str:
-        """调用字节豆包API"""
-        headers = {
-            "Authorization": f"Bearer {llm_config.api_key}",
-            "Content-Type": "application/json"
-        }
-        
-        data = {
-            "model": llm_config.model_name,
-            "messages": [
-                {"role": "system", "content": "你是一个专业的银行业务助手。"},
-                {"role": "user", "content": prompt}
-            ],
-            "temperature": 0.7,
-            "max_tokens": 1000
-        }
-        
-        async with session.post(
-            f"{llm_config.base_url}/api/v3/chat/completions",
-            headers=headers,
-            json=data,
-            timeout=30
-        ) as response:
-            result = await response.json()
-            return result["choices"][0]["message"]["content"]
     
     async def _call_deepseek_api(
         self, 
