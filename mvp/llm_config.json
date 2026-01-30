@@ -1,0 +1,42 @@
+{
+  "llm_configs": [
+    {
+      "name": "阿里通义千问",
+      "base_url": "https://dashscope.aliyuncs.com/api/v1/services/aigc",
+      "api_key": "sk-03f639acddb8425abd3c1b9722ec1014",
+      "model_name": "qwen-turbo",
+      "max_requests_per_minute": 100,
+      "enabled": true
+    },
+    {
+      "name": "字节豆包",
+      "base_url": "https://ark.cn-beijing.volces.com",
+      "api_key": "e1d32c08-96c2-442e-8198-1930d8b71a07",
+      "model_name": "ep-20241230140956-8xqkz",
+      "max_requests_per_minute": 100,
+      "enabled": true
+    },
+    {
+      "name": "DeepSeek",
+      "base_url": "https://api.deepseek.com",
+      "api_key": "sk-9b923042a7714c9cb68ff338ab68d36d",
+      "model_name": "deepseek-chat",
+      "max_requests_per_minute": 100,
+      "enabled": true
+    }
+  ],
+  "generation_settings": {
+    "samples_per_bank": 7,
+    "max_workers": 12,
+    "batch_size": 100,
+    "timeout_seconds": 30,
+    "retry_attempts": 3,
+    "temperature": 0.7,
+    "max_tokens": 1000
+  },
+  "database_settings": {
+    "batch_insert_size": 100,
+    "connection_pool_size": 10,
+    "max_overflow": 20
+  }
+}
