@@ -1,0 +1,95 @@
+version: '3.8'
+
+services:
+  # Redis缓存服务
+  redis:
+    image: redis:6-alpine
+    container_name: training_redis
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis_password_123}
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # 后端API服务
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: training_backend
+    environment:
+      - DATABASE_URL=sqlite:///./data/training_platform.db
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_password_123}@redis:6379/0
+      - SECRET_KEY=${SECRET_KEY:-your_secret_key_here}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-jwt_secret_key_here}
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - QWEN_API_KEY=${QWEN_API_KEY:-}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - DOUBAO_API_KEY=${DOUBAO_API_KEY:-}
+    volumes:
+      - upload_data:/app/uploads
+      - model_data:/app/models
+      - log_data:/app/logs
+      - sqlite_data:/app/data
+      - ./backend:/app
+    ports:
+      - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Celery Worker
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: training_celery_worker
+    command: celery -A app.celery worker --loglevel=info --concurrency=2
+    environment:
+      - DATABASE_URL=sqlite:///./data/training_platform.db
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_password_123}@redis:6379/0
+      - SECRET_KEY=${SECRET_KEY:-your_secret_key_here}
+      - QWEN_API_KEY=${QWEN_API_KEY:-}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - DOUBAO_API_KEY=${DOUBAO_API_KEY:-}
+    volumes:
+      - upload_data:/app/uploads
+      - model_data:/app/models
+      - log_data:/app/logs
+      - sqlite_data:/app/data
+      - ./backend:/app
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  # 前端服务
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: training_frontend
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000/api
+      - REACT_APP_WS_URL=ws://localhost:8000/ws
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    command: npm start
+
+volumes:
+  redis_data:
+  upload_data:
+  model_data:
+  log_data:
+  sqlite_data:

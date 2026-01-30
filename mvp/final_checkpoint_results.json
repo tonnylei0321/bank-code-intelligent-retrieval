@@ -1,0 +1,23 @@
+{
+  "timestamp": "2026-01-11T09:34:24.394972",
+  "tests": {
+    "environment": true,
+    "unit_tests": false,
+    "property_tests": false,
+    "end_to_end": true,
+    "performance": true,
+    "accuracy": true
+  },
+  "performance": {
+    "db_query_time_ms": 0.15497207641601562,
+    "complex_query_time_ms": 0.028133392333984375,
+    "file_write_time_ms": 0.7069110870361328,
+    "file_read_time_ms": 0.5059242248535156
+  },
+  "accuracy": {
+    "status": "NO_DATA",
+    "message": "No evaluation data available"
+  },
+  "overall_status": "FAILED",
+  "report_path": "FINAL_CHECKPOINT_REPORT.md"
+}
