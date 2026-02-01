@@ -42,6 +42,9 @@ def get_db() -> Generator[Session, None, None]:
     db = SessionLocal()
     try:
         yield db  # 提供会话给路由处理函数
+    except Exception:
+        db.rollback()  # 只在异常时回滚
+        raise
     finally:
         db.close()  # 请求结束后关闭会话
 

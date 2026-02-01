@@ -617,12 +617,22 @@ class ModelEvaluator:
             model, tokenizer = self.load_model(job.model_path)
             
             # Load test data
+            logger.info(f"Querying test data for dataset {job.dataset_id}")
+            
+            # 刷新数据库会话以确保获取最新数据
+            self.db.commit()
+            
             test_qa = self.db.query(QAPair).filter(
                 QAPair.dataset_id == job.dataset_id,
                 QAPair.split_type == "test"
             ).all()
             
+            logger.info(f"Query returned {len(test_qa)} test records")
+            
             if not test_qa:
+                # 额外调试信息
+                total_qa = self.db.query(QAPair).filter(QAPair.dataset_id == job.dataset_id).count()
+                logger.error(f"No test data found for dataset {job.dataset_id}, but found {total_qa} total records")
                 raise EvaluationError(f"No test data found for dataset {job.dataset_id}")
             
             logger.info(f"Loaded {len(test_qa)} test cases")
@@ -903,12 +913,22 @@ class ModelEvaluator:
             logger.info(f"Starting baseline evaluation for training job {training_job_id}")
             
             # Load test data
+            logger.info(f"Querying test data for dataset {job.dataset_id}")
+            
+            # 刷新数据库会话以确保获取最新数据
+            self.db.commit()
+            
             test_qa = self.db.query(QAPair).filter(
                 QAPair.dataset_id == job.dataset_id,
                 QAPair.split_type == "test"
             ).all()
             
+            logger.info(f"Query returned {len(test_qa)} test records")
+            
             if not test_qa:
+                # 额外调试信息
+                total_qa = self.db.query(QAPair).filter(QAPair.dataset_id == job.dataset_id).count()
+                logger.error(f"No test data found for dataset {job.dataset_id}, but found {total_qa} total records")
                 raise EvaluationError(f"No test data found for dataset {job.dataset_id}")
             
             logger.info(f"Loaded {len(test_qa)} test cases")

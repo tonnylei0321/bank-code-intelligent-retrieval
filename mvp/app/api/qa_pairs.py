@@ -64,6 +64,39 @@ from app.core.logging import logger
 router = APIRouter(prefix="/api/v1/qa-pairs", tags=["qa-pairs"])
 
 
+@router.get("/strategies")
+async def get_generation_strategies():
+    """
+    Get available generation strategies
+    获取可用的生成策略
+    
+    Returns:
+        Dictionary containing all available strategies
+    """
+    return {
+        "selection_strategies": [
+            {"value": "all", "label": "全部数据", "description": "使用所有可用数据"},
+            {"value": "by_bank", "label": "按银行挑选", "description": "根据银行名称分组挑选样本"},
+            {"value": "by_province", "label": "按省行挑选", "description": "根据省份分组挑选样本"},
+            {"value": "by_branch", "label": "按支行挑选", "description": "根据支行分组挑选样本"},
+            {"value": "by_region", "label": "按地区挑选", "description": "根据地区分组挑选样本"},
+            {"value": "random", "label": "随机挑选", "description": "随机选择样本数据"}
+        ],
+        "record_count_strategies": [
+            {"value": "all", "label": "全部记录", "description": "使用所有符合条件的记录"},
+            {"value": "custom", "label": "自定义数量", "description": "指定具体的记录数量"},
+            {"value": "percentage", "label": "按百分比", "description": "按百分比选择记录"}
+        ],
+        "llm_strategies": [
+            {"value": "exact", "label": "精确查询", "description": "使用完整银行名称查询联行号"},
+            {"value": "fuzzy", "label": "模糊查询", "description": "使用简称或不完整名称查询"},
+            {"value": "reverse", "label": "反向查询", "description": "根据联行号查询银行名称"},
+            {"value": "natural", "label": "自然语言", "description": "口语化的自然语言表达"}
+        ]
+    }
+
+
+@router.post("/generate", response_model=GenerationResult, status_code=status.HTTP_201_CREATED)
 @router.post("/generate", response_model=GenerationResult, status_code=status.HTTP_201_CREATED)
 @require_admin
 async def generate_qa_pairs(
@@ -79,6 +112,12 @@ async def generate_qa_pairs(
     1. Generates QA pairs for all valid bank code records in the dataset
     2. Automatically splits the generated pairs into train/val/test sets
     3. Returns generation statistics
+    
+    Supports:
+    - Multiple LLM providers (qwen, deepseek, volces, local)
+    - Different selection strategies
+    - Custom record count or percentage
+    - Multiple question types
     
     Requires admin role.
     
@@ -102,18 +141,24 @@ async def generate_qa_pairs(
                 detail=f"Split ratios must sum to 1.0, got {total_ratio}"
             )
         
-        # Create QA generator
-        generator = QAGenerator(db=db)
+        # Create QA generator with specified LLM provider
+        # 先创建TeacherModelAPI实例，指定provider
+        from app.services.teacher_model import TeacherModelAPI
+        teacher_api = TeacherModelAPI(provider=request.llm_provider)
+        generator = QAGenerator(db=db, teacher_api=teacher_api)
         
         logger.info(
             f"Starting QA pair generation for dataset {request.dataset_id} "
-            f"by user {current_user.username}"
+            f"by user {current_user.username} - "
+            f"Type: {request.generation_type}, Provider: {request.llm_provider}, "
+            f"Question types: {request.question_types}"
         )
         
-        # Generate QA pairs
+        # Generate QA pairs with supported parameters
         gen_results = generator.generate_for_dataset(
             dataset_id=request.dataset_id,
-            question_types=request.question_types
+            question_types=request.question_types,
+            max_records=request.custom_count if request.record_count_strategy == 'custom' else None
         )
         
         # Split dataset
@@ -152,6 +197,8 @@ async def generate_qa_pairs(
         return GenerationResult(
             dataset_id=request.dataset_id,
             total_generated=stats['total_qa_pairs'],
+            generated_count=stats['total_qa_pairs'],  # 添加这个字段以兼容前端
+            success_count=gen_results['successful'],  # 添加这个字段以兼容前端
             train_count=split_results['train_count'],
             val_count=split_results['val_count'],
             test_count=split_results['test_count'],
@@ -211,6 +258,72 @@ async def get_qa_pair_stats(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get QA pair statistics"
+        )
+
+
+@router.get("", response_model=List[QAPairResponse])
+async def get_all_qa_pairs(
+    skip: int = Query(0, ge=0, description="Number of records to skip"),
+    limit: int = Query(100, ge=1, le=1000, description="Number of records to return"),
+    question_type: Optional[str] = Query(None, description="Filter by question type"),
+    split_type: Optional[str] = Query(None, description="Filter by split type (train/val/test)"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get all QA pairs across all datasets
+    获取所有数据集的问答对
+    
+    Args:
+        skip: Number of records to skip for pagination
+        limit: Maximum number of records to return (1-1000)
+        question_type: Optional filter by question type (exact, fuzzy, reverse, natural)
+        split_type: Optional filter by split type (train, val, test)
+        current_user: Current authenticated user
+        db: Database session
+    
+    Returns:
+        List of QA pairs with pagination
+    """
+    try:
+        from app.models.qa_pair import QAPair
+        
+        # Build query
+        query = db.query(QAPair)
+        
+        # Apply filters
+        if question_type:
+            query = query.filter(QAPair.question_type == question_type)
+        if split_type:
+            query = query.filter(QAPair.split_type == split_type)
+        
+        # Apply pagination and ordering
+        qa_pairs = query.order_by(QAPair.generated_at.desc())\
+                       .offset(skip)\
+                       .limit(limit)\
+                       .all()
+        
+        logger.info(f"Retrieved {len(qa_pairs)} QA pairs for user {current_user.username}")
+        
+        return [
+            QAPairResponse(
+                id=qa.id,
+                dataset_id=qa.dataset_id,
+                question=qa.question,
+                answer=qa.answer,
+                question_type=qa.question_type,
+                split_type=qa.split_type,
+                source_record_id=qa.source_record_id,
+                generated_at=qa.generated_at
+            )
+            for qa in qa_pairs
+        ]
+        
+    except Exception as e:
+        logger.error(f"Error getting all QA pairs: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get QA pairs"
         )
 
 
@@ -328,6 +441,75 @@ async def delete_qa_pairs(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to delete QA pairs"
+        )
+
+
+@router.delete("/single/{qa_pair_id}", status_code=status.HTTP_204_NO_CONTENT)
+@require_admin
+async def delete_single_qa_pair(
+    qa_pair_id: int,
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Delete a single QA pair by ID (admin only)
+    删除单个问答对（仅管理员）
+    
+    Requires admin role.
+    
+    Args:
+        qa_pair_id: QA pair ID
+        current_user: Current admin user
+        db: Database session
+    
+    Returns:
+        No content (204)
+    """
+    logger.info(f"Attempting to delete QA pair {qa_pair_id} by user {current_user.username}")
+    
+    try:
+        # Find the QA pair
+        qa_pair = db.query(QAPair).filter(QAPair.id == qa_pair_id).first()
+        
+        if not qa_pair:
+            logger.warning(f"QA pair {qa_pair_id} not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"QA pair {qa_pair_id} not found"
+            )
+        
+        logger.info(f"Found QA pair {qa_pair_id}, proceeding with deletion")
+        
+        # Delete the QA pair
+        db.delete(qa_pair)
+        db.commit()
+        
+        logger.info(f"Committed deletion of QA pair {qa_pair_id}")
+        
+        # Verify deletion
+        verification = db.query(QAPair).filter(QAPair.id == qa_pair_id).first()
+        if verification is not None:
+            logger.error(f"QA pair {qa_pair_id} still exists after deletion!")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to delete QA pair - verification failed"
+            )
+        
+        logger.info(
+            f"Successfully deleted QA pair {qa_pair_id} from dataset {qa_pair.dataset_id} "
+            f"by user {current_user.username}"
+        )
+        
+        return None
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error deleting QA pair {qa_pair_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete QA pair"
         )
 
 

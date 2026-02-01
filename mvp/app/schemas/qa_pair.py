@@ -88,10 +88,21 @@ class QAPairStats(BaseModel):
 class GenerationRequest(BaseModel):
     """Schema for QA pair generation request"""
     dataset_id: int = Field(..., description="Dataset ID to generate QA pairs from")
+    generation_type: str = Field(default="llm", description="Generation type: llm or rule")
     question_types: list[str] = Field(
         default=["exact", "fuzzy", "reverse", "natural"],
         description="Types of questions to generate"
     )
+    sample_count: int = Field(default=10, description="Number of samples to generate per type")
+    selection_strategy: str = Field(default="all", description="Sample selection strategy")
+    record_count_strategy: str = Field(default="all", description="Record count strategy")
+    custom_count: Optional[int] = Field(None, description="Custom record count")
+    percentage: Optional[float] = Field(None, description="Percentage of records to use")
+    llm_provider: str = Field(default="qwen", description="LLM provider: qwen, deepseek, volces, local")
+    temperature: float = Field(default=0.7, description="Generation temperature")
+    max_tokens: int = Field(default=512, description="Maximum tokens")
+    task_name: Optional[str] = Field(None, description="Task name")
+    description: Optional[str] = Field(None, description="Task description")
     train_ratio: float = Field(default=0.8, ge=0.0, le=1.0, description="Training set ratio")
     val_ratio: float = Field(default=0.1, ge=0.0, le=1.0, description="Validation set ratio")
     test_ratio: float = Field(default=0.1, ge=0.0, le=1.0, description="Test set ratio")
@@ -101,6 +112,8 @@ class GenerationResult(BaseModel):
     """Schema for QA pair generation result"""
     dataset_id: int
     total_generated: int
+    generated_count: Optional[int] = None  # 兼容前端
+    success_count: Optional[int] = None  # 兼容前端
     train_count: int
     val_count: int
     test_count: int

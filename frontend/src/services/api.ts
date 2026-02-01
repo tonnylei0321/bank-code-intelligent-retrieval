@@ -322,14 +322,25 @@ export const dataAPI = {
  * 训练管理API
  */
 export const trainingAPI = {
+  /** 智能优化训练参数 */
+  optimizeTrainingParams: (data: {
+    dataset_id: number;
+    model_name: string;
+    target_training_time_hours: number;
+  }) => apiClient.post('/v1/training/optimize', data),
+  
   /** 启动训练任务 */
   startTraining: (data: {
     dataset_id: number;
     model_name?: string;
-    lora_rank?: number;
-    learning_rate?: number;
-    num_epochs?: number;
+    use_optimized_params?: boolean;
+    target_training_time_hours?: number;
+    epochs?: number;
     batch_size?: number;
+    learning_rate?: number;
+    lora_r?: number;
+    lora_alpha?: number;
+    lora_dropout?: number;
   }) => apiClient.post('/v1/training/start', data),
   
   /** 获取训练任务列表 */
@@ -341,6 +352,9 @@ export const trainingAPI = {
   
   /** 停止正在运行的训练任务 */
   stopTrainingJob: (id: number) => apiClient.post(`/v1/training/${id}/stop`),
+  
+  /** 停止训练任务（别名） */
+  stopTraining: (id: number) => apiClient.post(`/v1/training/${id}/stop`),
   
   /** 删除训练任务 */
   deleteTrainingJob: (id: number) => apiClient.post(`/v1/training/${id}/delete`),

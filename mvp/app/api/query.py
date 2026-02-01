@@ -162,8 +162,15 @@ def get_cached_query_service(model_path: str, db: Session) -> QueryService:
     # Check if model is already loaded
     if cache_key in _model_cache:
         service = _model_cache[cache_key]
-        # Update database session
+        # 重要修复：确保数据库会话是新鲜的
         service.db = db
+        # 确保会话状态正常
+        try:
+            if not service.db.is_active:
+                service.db.rollback()  # 重置会话状态
+        except Exception as e:
+            logger.warning(f"Failed to check/reset database session: {e}")
+        
         logger.info(f"Using cached model: {model_path}")
         return service
     

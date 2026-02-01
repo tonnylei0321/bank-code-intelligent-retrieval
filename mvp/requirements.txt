@@ -39,3 +39,16 @@ apscheduler==3.10.4
 
 # Logging
 loguru==0.7.2
+
+# RAG System
+chromadb==0.4.18
+sentence-transformers==2.2.2
+numpy==1.24.3
+
+# Redis
+redis==5.0.1
+aioredis==2.0.1
+
+# Small Models
+openai==1.3.0
+anthropic==0.7.0

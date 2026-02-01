@@ -56,7 +56,8 @@ async def upload_dataset(
     上传新的数据集文件（仅管理员）
     
     Requires admin role.
-    Only CSV files are supported.
+    Supports CSV and UNL file formats.
+    UNL files use pipe (|) delimiter.
     """
     try:
         baseline = get_baseline_system()

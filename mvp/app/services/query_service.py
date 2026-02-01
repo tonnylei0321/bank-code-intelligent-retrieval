@@ -170,6 +170,10 @@ class QueryService:
         self._cache_hits = 0
         self._total_queries = 0
         
+        # 初始化RAG服务
+        from app.services.rag_service import RAGService
+        self.rag_service = RAGService(db)
+        
         logger.info(f"QueryService initialized - Device: {self.device}")
         
         # Load model if path provided
@@ -453,7 +457,129 @@ class QueryService:
             raise QueryServiceError(f"Answer generation failed: {e}")
     
     @lru_cache(maxsize=500)
-    def extract_bank_entities_with_small_model(self, question: str) -> Dict[str, str]:
+    def format_structured_answer(
+        self,
+        question: str,
+        matched_records: List[Dict[str, str]],
+        confidence: float,
+        response_time: float
+    ) -> str:
+        """
+        格式化结构化答案输出 - 新增功能
+        
+        优化内容：
+        - 根据查询类型提供不同的答案格式
+        - 添加置信度和响应时间信息
+        - 提供用户友好的错误提示和建议
+        
+        Args:
+            question: 原始问题
+            matched_records: 匹配的银行记录
+            confidence: 置信度分数
+            response_time: 响应时间（毫秒）
+            
+        Returns:
+            结构化的答案字符串
+        """
+        try:
+            # 如果没有匹配记录
+            if not matched_records:
+                return self._format_no_match_answer(question)
+            
+            # 单个匹配记录
+            if len(matched_records) == 1:
+                return self._format_single_match_answer(matched_records[0], confidence)
+            
+            # 多个匹配记录
+            return self._format_multiple_match_answer(matched_records, confidence)
+            
+        except Exception as e:
+            logger.error(f"答案格式化失败：{e}")
+            return "抱歉，答案格式化时出现错误。"
+    
+    def _format_no_match_answer(self, question: str) -> str:
+        """
+        格式化无匹配结果的答案
+        
+        Args:
+            question: 原始问题
+            
+        Returns:
+            无匹配结果的友好提示
+        """
+        suggestions = []
+        
+        # 分析问题并提供建议
+        if len(question) < 3:
+            suggestions.append("• 请提供更详细的银行名称或地区信息")
+        
+        if not any(bank in question for bank in ["银行", "行"]):
+            suggestions.append("• 请确认查询的是银行机构")
+        
+        if not any(char.isdigit() for char in question):
+            suggestions.append("• 如果您知道部分联行号，可以包含在查询中")
+        
+        base_answer = "抱歉，未找到匹配的银行信息。"
+        
+        if suggestions:
+            base_answer += "\n\n建议：\n" + "\n".join(suggestions)
+        
+        base_answer += "\n\n您也可以尝试：\n• 使用银行全称（如：中国工商银行股份有限公司北京西单支行）\n• 包含具体地区信息（如：北京工商银行）"
+        
+        return base_answer
+    
+    def _format_single_match_answer(self, record: Dict[str, str], confidence: float) -> str:
+        """
+        格式化单个匹配结果的答案
+        
+        Args:
+            record: 银行记录
+            confidence: 置信度
+            
+        Returns:
+            格式化的单个匹配答案
+        """
+        answer = f"🏦 {record['bank_name']}\n📋 联行号：{record['bank_code']}"
+        
+        if record.get('clearing_code'):
+            answer += f"\n🔢 清算代码：{record['clearing_code']}"
+        
+        # 根据置信度添加不同的提示
+        if confidence >= 0.9:
+            answer += f"\n✅ 匹配度：{confidence:.1%}（高度匹配）"
+        elif confidence >= 0.7:
+            answer += f"\n⚠️ 匹配度：{confidence:.1%}（较好匹配）"
+        else:
+            answer += f"\n❓ 匹配度：{confidence:.1%}（请确认是否为您要查找的银行）"
+        
+        return answer
+    
+    def _format_multiple_match_answer(self, records: List[Dict[str, str]], confidence: float) -> str:
+        """
+        格式化多个匹配结果的答案
+        
+        Args:
+            records: 银行记录列表
+            confidence: 整体置信度
+            
+        Returns:
+            格式化的多个匹配答案
+        """
+        answer = f"找到 {len(records)} 个可能的匹配结果：\n\n"
+        
+        for i, record in enumerate(records[:5], 1):  # 最多显示5个结果
+            answer += f"{i}. 🏦 {record['bank_name']}\n"
+            answer += f"   📋 联行号：{record['bank_code']}\n"
+            if record.get('clearing_code'):
+                answer += f"   🔢 清算代码：{record['clearing_code']}\n"
+            answer += "\n"
+        
+        if len(records) > 5:
+            answer += f"... 还有 {len(records) - 5} 个结果未显示\n\n"
+        
+        answer += "💡 提示：请选择最符合您需求的银行，或提供更具体的信息以获得精确匹配。"
+        
+        return answer
         """
         使用小模型进行银行实体提取
         
@@ -596,12 +722,13 @@ class QueryService:
         temperature: float = 0.1
     ) -> str:
         """
-        使用小模型基于RAG结果生成最终答案
+        使用小模型基于RAG结果生成最终答案 - 优化版本
         
-        架构说明：
-        - 不使用大模型进行答案生成，避免幻觉
-        - 使用小模型进行答案汇总和格式化
-        - 确保答案的准确性和一致性
+        优化内容：
+        - 改进智能匹配算法，提升多结果场景下的最佳匹配选择
+        - 增强相似度计算，支持更精确的银行名称匹配
+        - 优化答案格式化和结构化输出
+        - 添加置信度评估和质量控制
         
         Args:
             question: 用户问题
@@ -614,82 +741,333 @@ class QueryService:
         """
         try:
             if not rag_results:
-                return "抱歉，未找到相关银行信息。"
+                return "抱歉，未找到相关银行信息。请尝试使用更具体的银行名称或地区信息。"
             
-            # 如果只有一个精确匹配结果，直接返回
+            # 如果只有一个结果，进行质量检查后返回
             if len(rag_results) == 1:
                 bank = rag_results[0]
-                return f"{bank['bank_name']}: {bank['bank_code']}"
+                confidence = self._calculate_single_result_confidence(question, bank)
+                
+                if confidence >= 0.7:
+                    return self._format_single_answer(bank, confidence)
+                else:
+                    # 置信度较低时，提供更多信息
+                    return self._format_low_confidence_answer(bank, confidence)
             
-            # 多个结果时，使用智能匹配算法选择最佳结果
-            logger.info(f"Selecting best match from {len(rag_results)} results for question: {question}")
+            # 多个结果时，使用优化的智能匹配算法
+            logger.info(f"优化答案生成：从{len(rag_results)}个结果中选择最佳匹配，问题：{question}")
             
-            # 提取问题中的关键信息
-            question_lower = question.lower()
+            # 提取问题中的关键信息（增强版本）
+            question_entities = self._extract_enhanced_entities(question)
+            logger.info(f"增强实体提取结果：{question_entities}")
             
-            # 计算每个结果的匹配分数
+            # 计算每个结果的综合匹配分数
             scored_results = []
             for bank in rag_results:
-                bank_name = bank['bank_name']
-                bank_name_lower = bank_name.lower()
-                
-                # 计算匹配分数（多个维度）
-                score = 0
-                
-                # 1. 完全匹配（最高优先级）
-                if question_lower in bank_name_lower or bank_name_lower in question_lower:
-                    score += 1000
-                
-                # 2. 关键词匹配（逐字符检查）
-                # 提取问题中的关键词（2-4字的词组）
-                keywords = []
-                for length in [4, 3, 2]:  # 优先匹配长词
-                    for i in range(len(question) - length + 1):
-                        keyword = question[i:i+length]
-                        # 过滤掉常见词
-                        if keyword not in ['有限公司', '股份有限', '公司', '银行', '支行', '分行']:
-                            keywords.append(keyword)
-                
-                # 去重并保持顺序
-                seen = set()
-                unique_keywords = []
-                for kw in keywords:
-                    if kw not in seen:
-                        seen.add(kw)
-                        unique_keywords.append(kw)
-                
-                logger.info(f"Extracted keywords from question: {unique_keywords}")
-                
-                # 计算关键词匹配数
-                matched_keywords = []
-                for keyword in unique_keywords:
-                    if keyword in bank_name:
-                        matched_keywords.append(keyword)
-                        score += 100 * len(keyword)  # 长关键词权重更高
-                
-                # 3. 字符重叠度
-                common_chars = set(question) & set(bank_name)
-                score += len(common_chars)
-                
-                # 4. 长度相似度（问题和银行名称长度越接近越好）
-                length_diff = abs(len(question) - len(bank_name))
-                score -= length_diff * 0.1
-                
-                logger.info(f"Bank: {bank_name[:50]}... | Score: {score:.2f} | Matched keywords: {matched_keywords}")
-                
-                scored_results.append((bank, score, matched_keywords))
+                match_score = self._calculate_comprehensive_match_score(question, question_entities, bank)
+                scored_results.append((bank, match_score))
             
-            # 按分数排序，选择最佳匹配
-            scored_results.sort(key=lambda x: x[1], reverse=True)
+            # 按分数排序并选择最佳匹配
+            scored_results.sort(key=lambda x: x[1]['total_score'], reverse=True)
             
-            best_match, best_score, best_keywords = scored_results[0]
-            logger.info(f"Best match selected: {best_match['bank_name']} (Score: {best_score:.2f}, Keywords: {best_keywords})")
+            best_match, best_score_info = scored_results[0]
+            logger.info(f"最佳匹配选择：{best_match['bank_name']} "
+                       f"(总分：{best_score_info['total_score']:.2f}，置信度：{best_score_info['confidence']:.2f})")
             
-            return f"{best_match['bank_name']}: {best_match['bank_code']}"
+            # 根据匹配质量决定返回策略
+            return self._generate_optimized_answer(question, scored_results, best_score_info)
             
         except Exception as e:
-            logger.error(f"Small model answer generation failed: {e}")
-            return "抱歉，生成答案时出现错误。"
+            logger.error(f"优化答案生成失败：{e}")
+            return "抱歉，生成答案时出现错误。请稍后重试或联系技术支持。"
+    
+    def _extract_enhanced_entities(self, question: str) -> Dict[str, Any]:
+        """
+        增强的实体提取，支持更精确的银行信息识别
+        
+        Args:
+            question: 用户问题
+            
+        Returns:
+            增强的实体信息字典
+        """
+        import re
+        
+        entities = {
+            'bank_names': [],
+            'locations': [],
+            'branch_types': [],
+            'keywords': [],
+            'is_full_name': False,
+            'query_type': 'general'
+        }
+        
+        # 检测完整银行名称
+        if "股份有限公司" in question and ("支行" in question or "分行" in question):
+            entities['is_full_name'] = True
+            entities['query_type'] = 'full_name'
+            entities['keywords'].append(question.strip())
+        
+        # 银行名称识别（扩展版本）
+        bank_patterns = {
+            '中国工商银行': ['工商银行', '工行', 'ICBC', '中国工商'],
+            '中国农业银行': ['农业银行', '农行', 'ABC', '中国农业'],
+            '中国银行': ['中行', 'BOC', '中银'],
+            '中国建设银行': ['建设银行', '建行', 'CCB', '中国建设'],
+            '交通银行': ['交行', 'BOCOM', '交通'],
+            '招商银行': ['招行', 'CMB', '招商'],
+            '浦发银行': ['上海浦东发展银行', 'SPDB', '浦东发展'],
+            '中信银行': ['中信', 'CITIC'],
+            '光大银行': ['中国光大银行', 'CEB', '光大'],
+            '华夏银行': ['华夏', 'HXB'],
+            '民生银行': ['中国民生银行', 'CMBC', '民生'],
+            '广发银行': ['广发', 'CGB', '广东发展银行'],
+            '平安银行': ['平安', 'PAB'],
+            '兴业银行': ['兴业', 'CIB'],
+            '邮储银行': ['邮政储蓄银行', 'PSBC', '邮储', '邮政银行']
+        }
+        
+        for full_name, aliases in bank_patterns.items():
+            if full_name in question:
+                entities['bank_names'].append(full_name)
+                entities['keywords'].extend([full_name] + aliases)
+                break
+            else:
+                for alias in aliases:
+                    if alias in question:
+                        entities['bank_names'].append(full_name)
+                        entities['keywords'].extend([full_name, alias])
+                        break
+        
+        # 地理位置识别（增强版本）
+        location_patterns = [
+            # 直辖市和省会
+            r'(北京|上海|天津|重庆|广州|深圳|成都|武汉|西安|南京|杭州)',
+            # 重要城市
+            r'(苏州|青岛|大连|宁波|厦门|无锡|常州|温州|佛山|东莞|中山)',
+            # 商业区和地标
+            r'(西单|王府井|中关村|国贸|金融街|陆家嘴|外滩|珠江新城|福田|南山)'
+        ]
+        
+        for pattern in location_patterns:
+            matches = re.findall(pattern, question)
+            entities['locations'].extend(matches)
+            entities['keywords'].extend(matches)
+        
+        # 支行类型识别
+        branch_patterns = [
+            r'([^银行]{1,15}支行)',
+            r'([^银行]{1,15}分行)',
+            r'(营业部|营业厅|分理处|储蓄所)'
+        ]
+        
+        for pattern in branch_patterns:
+            matches = re.findall(pattern, question)
+            entities['branch_types'].extend(matches)
+            entities['keywords'].extend(matches)
+        
+        # 查询类型判断
+        if entities['is_full_name']:
+            entities['query_type'] = 'full_name'
+        elif entities['bank_names'] and entities['locations']:
+            entities['query_type'] = 'bank_location'
+        elif entities['bank_names']:
+            entities['query_type'] = 'bank_only'
+        elif entities['locations']:
+            entities['query_type'] = 'location_only'
+        
+        return entities
+    
+    def _calculate_comprehensive_match_score(
+        self, 
+        question: str, 
+        entities: Dict[str, Any], 
+        bank: Dict[str, str]
+    ) -> Dict[str, Any]:
+        """
+        计算综合匹配分数，考虑多个维度
+        
+        Args:
+            question: 原始问题
+            entities: 提取的实体信息
+            bank: 银行记录
+            
+        Returns:
+            包含详细分数信息的字典
+        """
+        bank_name = bank['bank_name']
+        bank_name_lower = bank_name.lower()
+        question_lower = question.lower()
+        
+        score_info = {
+            'exact_match_score': 0,
+            'semantic_score': 0,
+            'location_score': 0,
+            'branch_score': 0,
+            'penalty_score': 0,
+            'rag_score': 0,
+            'total_score': 0,
+            'confidence': 0,
+            'matched_features': []
+        }
+        
+        # 1. 精确匹配分数（最高权重）
+        if entities['is_full_name'] and question.strip() == bank_name:
+            score_info['exact_match_score'] = 10000
+            score_info['matched_features'].append('完全匹配')
+        else:
+            # 关键词精确匹配
+            for keyword in entities['keywords']:
+                if len(keyword) >= 2 and keyword.lower() in bank_name_lower:
+                    score_info['exact_match_score'] += len(keyword) * 100
+                    score_info['matched_features'].append(f'关键词:{keyword}')
+        
+        # 2. 语义匹配分数
+        for bank_name_entity in entities['bank_names']:
+            if bank_name_entity in bank_name:
+                score_info['semantic_score'] += 1000
+                score_info['matched_features'].append(f'银行匹配:{bank_name_entity}')
+        
+        # 3. 地理位置匹配分数
+        for location in entities['locations']:
+            if location in bank_name:
+                score_info['location_score'] += 500
+                score_info['matched_features'].append(f'地理位置:{location}')
+        
+        # 4. 支行类型匹配分数
+        for branch_type in entities['branch_types']:
+            if branch_type in bank_name:
+                score_info['branch_score'] += 300
+                score_info['matched_features'].append(f'支行类型:{branch_type}')
+        
+        # 5. 惩罚分数（长度差异过大、无关匹配等）
+        length_diff = abs(len(question) - len(bank_name))
+        if length_diff > 30:
+            score_info['penalty_score'] -= length_diff * 2
+        
+        # 6. RAG检索分数
+        if 'final_score' in bank:
+            score_info['rag_score'] = bank['final_score'] * 50
+            score_info['matched_features'].append(f'RAG分数:{bank["final_score"]:.3f}')
+        
+        # 计算总分
+        score_info['total_score'] = (
+            score_info['exact_match_score'] +
+            score_info['semantic_score'] +
+            score_info['location_score'] +
+            score_info['branch_score'] +
+            score_info['penalty_score'] +
+            score_info['rag_score']
+        )
+        
+        # 计算置信度
+        score_info['confidence'] = min(1.0, max(0.0, score_info['total_score'] / 2000))
+        
+        return score_info
+    
+    def _calculate_single_result_confidence(self, question: str, bank: Dict[str, str]) -> float:
+        """
+        计算单个结果的置信度
+        
+        Args:
+            question: 用户问题
+            bank: 银行记录
+            
+        Returns:
+            置信度分数 (0.0-1.0)
+        """
+        question_lower = question.lower()
+        bank_name_lower = bank['bank_name'].lower()
+        
+        confidence = 0.0
+        
+        # 完全匹配
+        if question.strip() == bank['bank_name']:
+            confidence = 1.0
+        # 高度相似
+        elif question_lower in bank_name_lower or bank_name_lower in question_lower:
+            confidence = 0.9
+        # 关键词匹配
+        else:
+            common_chars = set(question_lower) & set(bank_name_lower)
+            if len(common_chars) > 0:
+                confidence = len(common_chars) / max(len(set(question_lower)), len(set(bank_name_lower)))
+        
+        # RAG分数加成
+        if 'final_score' in bank and bank['final_score'] > 0:
+            confidence = min(1.0, confidence + bank['final_score'] * 0.1)
+        
+        return confidence
+    
+    def _format_single_answer(self, bank: Dict[str, str], confidence: float) -> str:
+        """
+        格式化单个结果的答案
+        
+        Args:
+            bank: 银行记录
+            confidence: 置信度
+            
+        Returns:
+            格式化的答案
+        """
+        if confidence >= 0.9:
+            return f"{bank['bank_name']}: {bank['bank_code']}"
+        else:
+            return f"{bank['bank_name']}: {bank['bank_code']} (匹配度: {confidence:.1%})"
+    
+    def _format_low_confidence_answer(self, bank: Dict[str, str], confidence: float) -> str:
+        """
+        格式化低置信度答案
+        
+        Args:
+            bank: 银行记录
+            confidence: 置信度
+            
+        Returns:
+            格式化的答案
+        """
+        return (f"找到可能匹配的银行：{bank['bank_name']}: {bank['bank_code']}\n"
+                f"匹配度较低 ({confidence:.1%})，请确认是否为您要查找的银行。")
+    
+    def _generate_optimized_answer(
+        self, 
+        question: str, 
+        scored_results: List[Tuple[Dict[str, str], Dict[str, Any]]], 
+        best_score_info: Dict[str, Any]
+    ) -> str:
+        """
+        生成优化的答案
+        
+        Args:
+            question: 原始问题
+            scored_results: 评分结果列表
+            best_score_info: 最佳匹配的分数信息
+            
+        Returns:
+            优化的答案
+        """
+        best_match = scored_results[0][0]
+        
+        # 高置信度：直接返回最佳匹配
+        if best_score_info['confidence'] >= 0.8:
+            return f"{best_match['bank_name']}: {best_match['bank_code']}"
+        
+        # 中等置信度：返回最佳匹配并标注置信度
+        elif best_score_info['confidence'] >= 0.5:
+            return (f"{best_match['bank_name']}: {best_match['bank_code']}\n"
+                   f"(匹配度: {best_score_info['confidence']:.1%})")
+        
+        # 低置信度：返回多个候选结果
+        else:
+            top_results = scored_results[:min(3, len(scored_results))]
+            answer_parts = ["找到以下可能的匹配结果："]
+            
+            for i, (bank, score_info) in enumerate(top_results):
+                confidence_str = f"匹配度: {score_info['confidence']:.1%}"
+                answer_parts.append(f"{i+1}. {bank['bank_name']}: {bank['bank_code']} ({confidence_str})")
+            
+            answer_parts.append("请选择最符合您需求的银行。")
+            return "\n".join(answer_parts)
 
     def retrieve_relevant_banks(self, question: str, top_k: int = 5) -> List[Dict[str, str]]:
         """
@@ -899,12 +1277,26 @@ class QueryService:
                     )
                 
                 return cached_result
-            # RAG: Retrieve relevant banks from database
+            # RAG: Retrieve relevant banks using new vector-based RAG system
             context = None
             retrieved_banks = []
             logger.info(f"RAG enabled: {use_rag}")
             if use_rag:
-                retrieved_banks = self.retrieve_relevant_banks(question, top_k=5)
+                # 使用新的向量RAG系统
+                import asyncio
+                try:
+                    # 在同步函数中运行异步RAG检索
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    retrieved_banks = loop.run_until_complete(
+                        self.rag_service.retrieve_relevant_banks(question, top_k=5)
+                    )
+                    loop.close()
+                except Exception as rag_error:
+                    logger.warning(f"Vector RAG failed, falling back to keyword search: {rag_error}")
+                    # 降级到原有的关键词检索
+                    retrieved_banks = self.retrieve_relevant_banks(question, top_k=5)
+                
                 if retrieved_banks:
                     # Format context for the model
                     context_lines = []
@@ -920,32 +1312,51 @@ class QueryService:
             else:
                 logger.info("RAG: Disabled by request")
             
-            # 使用小模型基于RAG结果生成答案，而不是大模型
+            # 使用优化的小模型答案生成算法
             if retrieved_banks:
+                logger.info("使用优化的答案生成算法...")
                 answer = self.generate_answer_with_small_model(question, retrieved_banks)
             else:
-                answer = "抱歉，未找到相关银行信息。"
+                # 使用优化的无匹配答案格式化
+                answer = self._format_no_match_answer(question)
             
-            # 记录原始答案用于调试
-            logger.info(f"Model generated answer (first 300 chars): {answer[:300]}")
+            # 记录生成的答案（调试用）
+            logger.info(f"优化答案生成完成（前200字符）：{answer[:200]}")
             
             # Extract bank codes
             matched_records = self.extract_bank_codes(answer)
             
             # 记录提取结果
-            logger.info(f"Extracted {len(matched_records)} bank code records from answer")
+            logger.info(f"从答案中提取了{len(matched_records)}条银行记录")
+            
             if len(matched_records) == 0:
-                logger.warning(f"No bank codes found in answer. Full answer: {answer[:500]}")
+                logger.warning("未从答案中提取到银行代码")
+                # 如果有RAG结果但未提取到代码，使用RAG结果
+                if retrieved_banks:
+                    matched_records = retrieved_banks[:1]  # 使用最佳匹配
+                    logger.info("使用RAG检索结果作为匹配记录")
             
-            # If no records found, keep the original answer instead of replacing it
-            # This allows users to see what the model actually generated
-            if not matched_records:
-                logger.warning(f"No bank codes extracted from answer.")
-                # Don't replace the answer - let users see what the model generated
-                # answer = "抱歉，未找到相关的联行号信息。请检查您的查询是否准确，或尝试使用完整的银行名称。"
-            
-            # Calculate confidence
+            # Calculate confidence with RAG enhancement
             confidence = self.calculate_confidence(answer, matched_records)
+            
+            # 如果有RAG结果，调整置信度
+            if retrieved_banks and 'final_score' in retrieved_banks[0]:
+                rag_confidence = min(1.0, retrieved_banks[0]['final_score'] / 10.0)
+                confidence = max(confidence, rag_confidence)
+                logger.info(f"RAG置信度调整：{rag_confidence:.3f}")
+            
+            # 使用新的结构化答案格式化（如果有匹配记录）
+            if matched_records:
+                try:
+                    formatted_answer = self.format_structured_answer(
+                        question, matched_records, confidence, 0
+                    )
+                    # 如果格式化答案更好，使用格式化版本
+                    if len(formatted_answer) > len(answer) and "🏦" in formatted_answer:
+                        answer = formatted_answer
+                        logger.info("使用结构化格式化答案")
+                except Exception as format_error:
+                    logger.warning(f"答案格式化失败，使用原始答案：{format_error}")
             
             # Calculate response time
             response_time = (time.time() - start_time) * 1000  # Convert to milliseconds
@@ -1039,6 +1450,11 @@ class QueryService:
             response_time: Response time in milliseconds
         """
         try:
+            # 确保数据库会话是活跃的
+            if not self.db.is_active:
+                logger.warning("Database session is not active, attempting to refresh")
+                self.db.rollback()  # 重置会话状态
+            
             query_log = QueryLog(
                 user_id=user_id,
                 question=question,
@@ -1049,9 +1465,13 @@ class QueryService:
             )
             self.db.add(query_log)
             self.db.commit()
+            logger.info(f"Query logged successfully: user_id={user_id}, question='{question[:50]}...'")
         except Exception as e:
             logger.error(f"Failed to log query: {e}")
-            self.db.rollback()
+            try:
+                self.db.rollback()
+            except Exception as rollback_error:
+                logger.error(f"Failed to rollback transaction: {rollback_error}")
     
     def get_query_history(
         self,

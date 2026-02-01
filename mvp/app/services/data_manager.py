@@ -73,8 +73,8 @@ class DataManager:
             ValueError: 文件格式无效或上传失败
         """
         # 验证文件扩展名
-        if not file.filename.endswith('.csv'):
-            raise ValueError("仅支持CSV文件格式")
+        if not file.filename.endswith(('.csv', '.unl')):
+            raise ValueError("仅支持CSV和UNL文件格式")
         
         # 创建上传目录（如果不存在）
         upload_dir = Path(settings.UPLOAD_DIR)
@@ -178,19 +178,33 @@ class DataManager:
         try:
             with transaction_scope(self.db) as session:
                 with open(dataset.file_path, 'r', encoding='utf-8') as f:
-                    # 尝试检测文件是否有表头
-                    sample = f.read(1024)
-                    f.seek(0)
+                    # 根据文件扩展名确定分隔符
+                    file_extension = dataset.file_path.lower().split('.')[-1]
+                    if file_extension == 'unl':
+                        # UNL文件使用竖线分隔符
+                        delimiter = '|'
+                        logger.info(f"检测到UNL文件，使用竖线分隔符")
+                    else:
+                        # CSV文件，尝试检测分隔符
+                        sample = f.read(1024)
+                        f.seek(0)
+                        
+                        # 使用csv.Sniffer检测CSV格式
+                        try:
+                            dialect = csv.Sniffer().sniff(sample)
+                            delimiter = dialect.delimiter
+                            has_header = csv.Sniffer().has_header(sample)
+                        except:
+                            delimiter = ','
+                            has_header = False
+                        
+                        logger.info(f"检测到CSV文件，使用分隔符: '{delimiter}'")
                     
-                    # 使用csv.Sniffer检测CSV格式
-                    try:
-                        dialect = csv.Sniffer().sniff(sample)
-                        has_header = csv.Sniffer().has_header(sample)
-                    except:
-                        dialect = csv.excel
+                    # 对于UNL文件，通常没有表头
+                    if file_extension == 'unl':
                         has_header = False
                     
-                    reader = csv.reader(f, dialect=dialect)
+                    reader = csv.reader(f, delimiter=delimiter)
                     
                     # 读取第一行，判断是否为表头
                     first_row = next(reader, None)

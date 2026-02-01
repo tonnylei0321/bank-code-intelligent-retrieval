@@ -10,9 +10,10 @@
 """
 from functools import wraps
 from typing import Callable
-from fastapi import HTTPException, status
+from fastapi import HTTPException, status, Depends
 
-from app.models.user import UserRole
+from app.models.user import UserRole, User
+from app.core.deps import get_current_user
 
 
 def require_role(*allowed_roles: UserRole):
@@ -65,6 +66,39 @@ def require_role(*allowed_roles: UserRole):
     return decorator
 
 
+def require_admin_user(current_user: User = Depends(get_current_user)) -> User:
+    """
+    FastAPI依赖函数：要求管理员权限
+    
+    这是一个FastAPI依赖函数，用于验证当前用户是否具有管理员权限。
+    如果用户不是管理员，将抛出403 Forbidden异常。
+    
+    Args:
+        current_user: 当前认证用户（通过get_current_user依赖获取）
+    
+    Returns:
+        验证通过的管理员用户对象
+    
+    Raises:
+        HTTPException: 如果用户不是管理员
+    
+    使用示例:
+        @router.post("/admin-only")
+        async def admin_endpoint(
+            admin_user: User = Depends(require_admin_user),
+            db: Session = Depends(get_db)
+        ):
+            # admin_user 已经验证是管理员
+            ...
+    """
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="权限不足：需要管理员权限"
+        )
+    return current_user
+
+
 def require_admin(func: Callable):
     """
     要求管理员角色才能访问端点的装饰器
@@ -85,6 +119,14 @@ def require_admin(func: Callable):
             ...
     """
     return require_role(UserRole.ADMIN)(func)
+
+
+def require_permission(user: User, permission: str):
+    """简单的权限检查函数"""
+    if permission == "admin" and user.role != "admin":
+        raise HTTPException(status_code=403, detail="需要管理员权限")
+    elif permission == "user" and user.role not in ["admin", "user"]:
+        raise HTTPException(status_code=403, detail="需要用户权限")
 
 
 def check_permission(user_role: str, required_role: UserRole) -> bool:

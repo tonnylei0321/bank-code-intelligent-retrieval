@@ -10,7 +10,7 @@ from app.core.database import init_db
 from app.core.logging import setup_logging, logger
 from app.core.rate_limiter import RateLimiter, RateLimitMiddleware
 from app.core.exceptions import register_exception_handlers
-from app.api import auth, admin, datasets, qa_pairs, training, evaluation, query, logs, training_data, bank_data
+from app.api import auth, admin, datasets, qa_pairs, training, evaluation, query, logs, training_data, bank_data, llm_prompts, rag, redis_management, intelligent_qa, sample_generation, sample_generation_async, sample_sets
 
 
 @asynccontextmanager
@@ -109,6 +109,17 @@ app.include_router(query.router)
 app.include_router(logs.router)
 app.include_router(training_data.router)
 app.include_router(bank_data.router)
+app.include_router(llm_prompts.router)
+app.include_router(rag.router)
+app.include_router(redis_management.router, prefix="/api/redis", tags=["Redis管理"])
+app.include_router(intelligent_qa.router, prefix="/api/intelligent-qa", tags=["智能问答"])
+app.include_router(sample_generation.router)
+app.include_router(sample_generation_async.router)
+app.include_router(sample_sets.router)
+
+# 导入并注册LLM提示词模板路由
+from app.api import llm_prompt_templates
+app.include_router(llm_prompt_templates.router)
 
 
 @app.get("/")

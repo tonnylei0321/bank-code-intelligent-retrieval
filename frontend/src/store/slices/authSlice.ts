@@ -56,14 +56,46 @@ export interface AuthState {
  * 初始状态
  * 从localStorage恢复令牌，实现页面刷新后保持登录状态
  */
+const token = localStorage.getItem('access_token');
+const storedRefreshToken = localStorage.getItem('refresh_token');
+
 const initialState: AuthState = {
-  isAuthenticated: false,
+  isAuthenticated: !!token, // 如果有token就认为已认证
   user: null,
-  token: localStorage.getItem('access_token'),
-  refreshToken: localStorage.getItem('refresh_token'),
+  token,
+  refreshToken: storedRefreshToken,
   loading: false,
   error: null,
 };
+
+/**
+ * 异步操作：验证现有token并获取用户信息
+ * 
+ * 在应用启动时调用，检查localStorage中的token是否有效
+ * 如果有效则获取用户信息，否则清除认证状态
+ */
+export const validateToken = createAsyncThunk(
+  'auth/validateToken',
+  async (_, { rejectWithValue }) => {
+    const token = localStorage.getItem('access_token');
+    if (!token) {
+      return rejectWithValue('No token found');
+    }
+    
+    try {
+      const userResponse = await authAPI.getCurrentUser();
+      return {
+        user: userResponse.data,
+        token,
+      };
+    } catch (error) {
+      // Token无效，清除localStorage
+      localStorage.removeItem('access_token');
+      localStorage.removeItem('refresh_token');
+      return rejectWithValue('Token invalid');
+    }
+  }
+);
 
 /**
  * 异步操作：用户登录
@@ -173,6 +205,24 @@ const authSlice = createSlice({
    */
   extraReducers: (builder) => {
     builder
+      // 验证token操作的状态处理
+      .addCase(validateToken.pending, (state) => {
+        state.loading = true;
+      })
+      .addCase(validateToken.fulfilled, (state, action) => {
+        state.loading = false;
+        state.isAuthenticated = true;
+        state.user = action.payload.user;
+        state.token = action.payload.token;
+      })
+      .addCase(validateToken.rejected, (state) => {
+        state.loading = false;
+        state.isAuthenticated = false;
+        state.user = null;
+        state.token = null;
+        state.refreshToken = null;
+      })
+      
       // 登录操作的状态处理
       .addCase(login.pending, (state) => {
         // 登录请求中

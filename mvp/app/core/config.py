@@ -5,7 +5,9 @@
 所有配置项都有类型注解和默认值，确保配置的类型安全。
 """
 from typing import List
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import Dict
 
 
 class Settings(BaseSettings):
@@ -41,9 +43,21 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_HOURS: int = 24  # 访问令牌过期时间（小时）
     
     # 大模型API配置（通义千问）
-    QWEN_API_KEY: str = ""  # 通义千问API密钥
+    QWEN_API_KEY: str = Field(default="", env="QWEN_API_KEY")  # 通义千问API密钥
     QWEN_API_URL: str = ""  # API端点（优先使用）
     QWEN_ENDPOINT: str = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"  # API端点（兼容旧配置）
+    
+    # 其他大模型API配置
+    OPENAI_API_KEY: str = Field(default="", env="OPENAI_API_KEY")  # OpenAI API密钥
+    ANTHROPIC_API_KEY: str = Field(default="", env="ANTHROPIC_API_KEY")  # Anthropic API密钥
+    
+    # DeepSeek API配置
+    DEEPSEEK_API_KEY: str = Field(default="", env="DEEPSEEK_API_KEY")  # DeepSeek API密钥
+    DEEPSEEK_API_URL: str = Field(default="https://api.deepseek.com", env="DEEPSEEK_API_URL")  # DeepSeek API端点
+    
+    # 火山引擎API配置
+    VOLCES_API_KEY: str = Field(default="", env="VOLCES_API_KEY")  # 火山引擎API密钥
+    VOLCES_API_URL: str = Field(default="https://ark.cn-beijing.volces.com", env="VOLCES_API_URL")  # 火山引擎API端点
     
     @property
     def qwen_api_url(self) -> str:

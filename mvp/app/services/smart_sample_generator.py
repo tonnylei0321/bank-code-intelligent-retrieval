@@ -32,6 +32,72 @@ class SmartSampleGenerator:
         self.device = self._get_device()
         logger.info(f"SmartSampleGenerator initialized - Model: {llm_model}, Device: {self.device}")
     
+    def _get_prompt_template(self, llm_name: str = "qwen") -> str:
+        """
+        获取LLM提示词模板
+        
+        Args:
+            llm_name: LLM名称
+            
+        Returns:
+            提示词模板字符串
+        """
+        try:
+            from app.core.database import SessionLocal
+            from app.models.llm_prompt import LLMPrompt
+            
+            db = SessionLocal()
+            try:
+                prompt_config = db.query(LLMPrompt).filter(
+                    LLMPrompt.llm_name == llm_name,
+                    LLMPrompt.is_active == True
+                ).first()
+                
+                if prompt_config:
+                    return prompt_config.prompt_template
+                else:
+                    logger.warning(f"未找到LLM '{llm_name}' 的提示词配置，使用默认提示词")
+                    return self._get_default_prompt_template()
+            finally:
+                db.close()
+                
+        except Exception as e:
+            logger.error(f"获取提示词模板失败: {e}")
+            return self._get_default_prompt_template()
+    
+    def _get_default_prompt_template(self) -> str:
+        """获取默认提示词模板"""
+        return """你是一个银行业务专家。请为以下银行生成{num_samples}种不同的自然语言查询方式。
+
+银行信息：
+- 完整名称：{bank_name}
+- 联行号：{bank_code}
+
+要求：
+1. 生成{num_samples}种用户可能的问法
+2. 包括：完整名称、简称、口语化表达、地区+银行名、不完整描述等
+3. 模拟真实用户的查询习惯（简短、自然、口语化）
+4. 每种问法要自然、简洁，不要太长
+
+请直接返回JSON格式（不要有其他文字）：
+{{
+    "questions": [
+        "问法1",
+        "问法2",
+        "问法3",
+        ...
+    ]
+}}
+
+示例：
+对于"中国工商银行股份有限公司北京市分行"，可能的问法包括：
+- "工商银行北京分行"
+- "北京工行"
+- "ICBC北京"
+- "工行北京市分行联行号"
+- "北京的工商银行"
+等等。"""
+    
     def _get_device(self) -> str:
         """检测可用设备"""
         if torch.cuda.is_available():
@@ -89,7 +155,8 @@ class SmartSampleGenerator:
         self, 
         bank_name: str, 
         bank_code: str,
-        num_samples: int = 7
+        num_samples: int = 7,
+        llm_name: str = "qwen"
     ) -> List[Dict]:
         """
         为单个银行生成多样化训练样本
@@ -108,7 +175,7 @@ class SmartSampleGenerator:
         
         try:
             # 使用 LLM 生成
-            samples = self._generate_with_llm(bank_name, bank_code, num_samples)
+            samples = self._generate_with_llm(bank_name, bank_code, num_samples, llm_name)
             
             # 如果 LLM 生成失败，回退到规则生成
             if not samples or len(samples) < 3:
@@ -125,43 +192,20 @@ class SmartSampleGenerator:
         self, 
         bank_name: str, 
         bank_code: str,
-        num_samples: int
+        num_samples: int,
+        llm_name: str = "qwen"
     ) -> List[Dict]:
         """使用 LLM 生成样本"""
         
-        prompt = f"""你是一个银行业务专家。请为以下银行生成{num_samples}种不同的自然语言查询方式。
-
-银行信息：
-- 完整名称：{bank_name}
-- 联行号：{bank_code}
-
-要求：
-1. 生成{num_samples}种用户可能的问法
-2. 包括：完整名称、简称、口语化表达、地区+银行名、不完整描述等
-3. 模拟真实用户的查询习惯（简短、自然、口语化）
-4. 每种问法要自然、简洁，不要太长
-
-请直接返回JSON格式（不要有其他文字）：
-{{
-    "questions": [
-        "问法1",
-        "问法2",
-        "问法3",
-        ...
-    ]
-}}
-
-示例：
-对于"中国工商银行股份有限公司北京市分行"，可以生成：
-- "中国工商银行股份有限公司北京市分行"
-- "工商银行北京市分行"
-- "工行北京分行"
-- "北京工商银行"
-- "北京工行"
-- "工商银行北京"
-- "工行北京"
-
-现在请为上述银行生成{num_samples}种问法："""
+        # 获取自定义提示词模板
+        prompt_template = self._get_prompt_template(llm_name)
+        
+        # 格式化提示词
+        prompt = prompt_template.format(
+            bank_name=bank_name,
+            bank_code=bank_code,
+            num_samples=num_samples
+        )
 
         # 构建消息
         messages = [
